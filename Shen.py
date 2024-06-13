@@ -1,4 +1,4 @@
-import random
+import random,math
 
 e=2.718281828459
 
@@ -7,19 +7,33 @@ class Vec(list):
     矢量，一个元素只有数字的列表，可以进行按位加减乘等操作
     '''
     def __add__(self, other):
+        if len(self)!=len(other):
+            raise Exception("运算的两者长度不同")
         return Vec([self[i] + other[i] for i in range(len(self))])
 
     def __sub__(self, other):
+        if len(self)!=len(other):
+            raise Exception("运算的两者长度不同")
         return Vec([self[i] - other[i] for i in range(len(self))])
 
     def __mul__(self, other):
+        if len(self)!=len(other):
+            raise Exception("运算的两者长度不同")
         return Vec([self[i] * other[i] for i in range(len(self))])
+
+    def __truediv__(self, other):
+        if len(self)!=len(other):
+            raise Exception("运算的两者长度不同")
+        return Vec([self[i] / other[i] for i in range(len(self))])
 
     def __iadd__(self, other):
         return Vec(self+other)
 
     def __pow__(self, power:float, modulo=None):
-        return Vec([self[i] ** power for i in range(len(self))])
+        return Vec([i ** power for i in self])
+
+    def __neg__(self):
+        return Vec([-i for i in self])
 
     def batchprocess(self,func,*args):
         return Vec([func(self[i],*args) for i in range(len(self))])
@@ -53,9 +67,16 @@ class Ten():
         o=Mul()
         return o.compute(self,other)
 
+    def __truediv__(self, other):
+        o=Div()
+        return o.compute(self,other)
+
     def __pow__(self, power, modulo=None):
         o=Pownum()
         return o.compute(self,power)
+
+    def __len__(self):
+        return len(self.data)
 
     def sum(self):
         o=Sum()
@@ -69,10 +90,39 @@ class Ten():
         o=Exp()
         return o.compute(self)
 
+    def log(self):
+        o=Log()
+        return o.compute(self)
+
     def softmax(self):
         a=self.exp()
-        b=Ten.connect([a.sum()**-1 for i in range(len(a.data))])
-        return a*b
+        s=a.sum()**-1
+        c=Ten.connect([s for i in range(len(a))])
+        return c*a
+
+    def sigmoid(self):
+        o=Sigmoid()
+        return o.compute(self)
+
+    @classmethod
+    def mse(cls,a,b):
+        '''
+        均方误差
+        :param a: Ten
+        :param b: Ten
+        :return: Ten
+        '''
+        return ((a-b)**2).sum()
+
+    @classmethod
+    def nll(cls, out, target):
+        '''
+        交叉熵误差
+        :param out: Ten
+        :param target: Ten
+        :return: Ten
+        '''
+        return Ten([0])-(target*out.log()).sum()
 
     def zerograd(self):
         '''
@@ -88,6 +138,15 @@ class Ten():
         '''
         self.grad = Vec([1 for i in self.grad])
 
+    @classmethod
+    def zero(cls,size):
+        '''
+        创建一个长度为size的Ten，填充0
+        :param size: int
+        :return: Ten
+        '''
+        return Ten([0 for i in range(size)])
+
     def graddescent(self,k):
         '''
         梯度下降，在反向传播积累梯度后使用
@@ -96,9 +155,10 @@ class Ten():
         '''
         self.data-=self.grad.batchprocess(lambda x:x*k)
 
-    def back(self):
+    def back(self,clean=True):
         '''
         反向传播
+        :param clean: bool 是否清零计算图
         :return: None
         '''
         self.grad=Vec([1 for i in self.grad])
@@ -108,11 +168,25 @@ class Ten():
                 continue
             if type(i.inp) is list: # 若运算符输入为list
                 for ea in i.inp:
-                    if ea.op not in oplist:
+                    if ea.op not in oplist and ea.op is not None:
                         oplist.append(ea.op)    # 把每个输入的运算符(去掉重复的)加入表中
-            else:
+            elif i.inp.op not in oplist and i.inp.op is not None:
                 oplist.append(i.inp.op)
+        oplist.sort(key=lambda x:Operator.computelist.index(x),reverse=True)
+        for i in oplist:
             i.diriv()
+        if clean:
+            Operator.computelist=[]
+
+    def cut(self,start,end):
+        '''
+        切片，取自身的一部分
+        :param start: int 开始索引
+        :param end: int 结束索引（结果不包括结束索引对应元素）
+        :return: Ten
+        '''
+        o=Cut()
+        return o.compute(self,start,end)
 
     @classmethod
     def connect(cls,x):
@@ -123,6 +197,7 @@ class Ten():
         '''
         o=Connect()
         return o.compute(x)
+
 
 class Operator():
     '''
@@ -155,7 +230,7 @@ class Operator():
     def back(cls):
         '''
         全局梯度计算。从后向前对每一个运算符使用diriv
-        使用前，请先把损失函数的结果的梯度设为1
+        使用前，请先把结果的梯度设为1
         使用后，会自动把computelist的内容删除，请注意
         :return:None
         '''
@@ -206,6 +281,20 @@ class Mul(Operator):
         self.inp[0].grad += self.inp[1].data * self.out.grad
         self.inp[1].grad += self.inp[0].data * self.out.grad
 
+class Div(Operator):
+    def __init__(self):
+        super().__init__()
+
+    def compute(self, a:Ten, b:Ten):
+        self.inp=[a,b]
+        c=Ten(a.data / b.data,self)
+        self.out=c
+        return c
+
+    def diriv(self):
+        self.inp[0].grad+=(self.inp[1].data**-1)*self.out.grad
+        self.inp[1].grad+=(-self.inp[0].data/self.inp[1].data**2)*self.out.grad
+
 class Sum(Operator):
     def __init__(self):
         super().__init__()
@@ -238,6 +327,22 @@ class Connect(Operator):
         for i in range(len(self.inp)):
             self.inp[i].grad += Vec(seg[:len(self.inp[i].grad)])
             seg= seg[len(self.inp[i].grad):]
+
+class Cut(Operator):
+    def __init__(self):
+        super().__init__()
+
+    def compute(self,a,start,end):
+        self.inp=a
+        self.start=start
+        self.end=end
+        c=Ten(a.data[start:end],self)
+        self.out=c
+        return c
+
+    def diriv(self):
+        for i in range(len(self.out.data)):
+            self.inp.grad[i+self.start]+=self.out.grad[i]
 
 class Relu(Operator):
     def __init__(self):
@@ -275,7 +380,7 @@ class Pownum(Operator):
         return c
 
     def diriv(self):
-        self.inp.grad=Vec([self.num * self.inp.data[i] ** (self.num - 1) * self.out.grad[i] for i in range(len((self.inp.grad)))])
+        self.inp.grad+=Vec([self.num * self.inp.data[i] ** (self.num - 1) * self.out.grad[i] for i in range(len((self.inp.grad)))])
 
 class Exp(Operator):
     '''
@@ -291,7 +396,37 @@ class Exp(Operator):
         return c
 
     def diriv(self):
-        self.inp.grad=self.out.data*self.out.grad
+        self.inp.grad+=self.out.data*self.out.grad
+
+class Log(Operator):
+    '''
+    自然对数函数
+    '''
+    def __init__(self):
+        super().__init__()
+
+    def compute(self,a):
+        self.inp=a
+        c=Ten([math.log(i) if i!=0 else float("inf") for i in a.data],self)
+        self.out=c
+        return c
+
+    def diriv(self):
+        self.inp.grad+=self.inp.data**-1*self.out.grad
+
+class Sigmoid(Operator):
+    def __init__(self):
+        super().__init__()
+
+    def compute(self, a):
+        self.inp=a
+        c=Ten([1/(1+e**(-i)) for i in a.data],self)
+        self.out=c
+        return c
+
+    def diriv(self):
+        self.inp.grad+=self.out.data*(self.out.grad*(Vec([1 for i in range(len(self.out))])-self.out.data))
+
 
 class Layer:
     '''
@@ -360,15 +495,15 @@ class Linear(Layer):
         '''
         super().__init__()
         if not Layer.isload:
-            self.w=[Ten([random.gauss(0,0.01) for i in range(inpsize)]) for i in range(outsize)]
+            self.w=[randinit(inpsize) for i in range(outsize)]
             self.bias=bias
             if bias:
-                self.b=[Ten([random.gauss(0,0.01)]) for i in range(outsize)]
+                self.b=[randinit(1) for i in range(outsize)]
 
     def __call__(self,a):
         '''
         进行运算
-        :param a:Ten
+        :param a: Ten
         :return: Ten
         '''
         if self.bias:
@@ -381,7 +516,7 @@ class Linear(Layer):
     def grad_descent_zero(self,k):
         '''
         进行梯度下降，并清空梯度
-        :param k: 步长
+        :param k: float 步长
         :return: None
         '''
         for i in range(len(self.w)):
@@ -422,6 +557,155 @@ class Ten2(Ten,Layer):
     def load(self,t):
         self.data=eval(t)
 
+class Conv(Layer):
+    def __init__(self,width,height,stride_w=1,stride_h=1,pad=True,bias=True):
+        '''
+        2d卷积层
+        :param width: int 卷积核的宽度（如填充，请设为奇数）
+        :param height: int 卷积核的高度（如填充，请设为奇数）
+        :param stride_w: int 横向的步长
+        :param stride_h: int 纵向的步长
+        :param pad: bool 是否进行填充（使运算的输入和输出的大小一样）
+        :param bias: bool 是否加上偏置
+        '''
+        super().__init__()
+        if not Layer.isload:
+            self.width=width
+            self.height=height
+            self.stride_h=stride_h
+            self.stride_w=stride_w
+            self.pad=pad
+            self.kernel=randinit(width*height)
+            self.bias=bias
+            if bias:
+                self.b=randinit(1)
+
+    def padding(self,x):
+        '''
+        填充
+        :param x: list[Ten(),Ten()...]  2d的Ten，或者说列表包着的一列Ten
+        :return: list[Ten(),Ten()...]
+        '''
+        padx=(self.stride_w*(len(x[0])-1)-len(x[0])+self.width)//2
+        pady=(self.stride_h*(len(x)-1)-len(x)+self.height)//2
+        x2=[]
+        for i in range(pady):
+            x2.append(Ten.zero(len(x[0])+padx*2))
+        for i in range(len(x)):
+            x2.append(Ten.connect([Ten.zero(padx),x[i],Ten.zero(padx)]))
+        for i in range(pady):
+            x2.append(Ten.zero(len(x[0])+padx*2))
+        return x2
+
+    def __call__(self,x):
+        '''
+        进行运算
+        :param x: list[Ten(),Ten()...]  2d的Ten，或者说list包着的一列Ten
+        :return: list[Ten(),Ten()...]
+        '''
+        if self.pad:
+            x=self.padding(x)
+        x2=[]
+        for ypos in range(0,len(x)-self.height+1,self.stride_h):
+            x2line = []
+            for xpos in range(0,len(x[0])-self.width+1,self.stride_w):
+                window=Ten.connect([x[ypos+i].cut(xpos,xpos+self.width) for i in range(self.height)])
+                v=(window*self.kernel).sum()
+                if self.bias:
+                    v+=self.b
+                x2line.append(v)
+            x2.append(Ten.connect(x2line))
+        return x2
+
+    def save(self):
+        t=f"{self.width}/{self.height}/{self.kernel.data}/{self.stride_w}/{self.stride_h}/{self.pad}"
+        if self.bias:
+            t+=f"/{self.b.data}"
+        return t
+
+    def load(self,t):
+        t = t.split("/")
+        self.width=int(t[0])
+        self.height=int(t[1])
+        self.kernel=Ten(eval(t[2]))
+        self.stride_w=int(t[3])
+        self.stride_h=int(t[4])
+        self.pad=eval(t[5])
+        if len(t)==7:
+            self.bias=True
+            self.b=Ten(eval(t[6]))
+        else:
+            self.bias=False
+
+    def grad_descent_zero(self,k):
+        self.kernel.graddescent(k)
+        self.kernel.zerograd()
+
+class MultiConv:
+    def __init__(self,inchannel,outchannel,width,height,stride_w=1,stride_h=1,pad=True,bias=True):
+        '''
+        多通道卷积层
+        :param inchannel: int 输入通道数
+        :param outchannel: int 输出通道数
+        :param width: int 卷积核的宽度（如填充，请设为奇数）
+        :param height: int 卷积核的高度（如填充，请设为奇数）
+        :param stride_w: int 横向的步长
+        :param stride_h: int 纵向的步长
+        :param pad: bool 是否进行填充（使运算的输入和输出的大小一样）
+        :param bias: bool 是否加上偏置
+        '''
+        self.cores=[[Conv(width,height,stride_w,stride_h,pad=False,bias=bias) for j in range(inchannel)] for i in range(outchannel)]
+        self.pad=pad
+
+    def __call__(self,x):
+        '''
+        进行运算
+        :param x:list[list[Ten,Ten...],list[Ten,Ten...]...] 多通道的2dTen，被list包着的2dTen
+        :return: list[list[Ten,Ten...],list[Ten,Ten...]...]
+        '''
+        if self.pad:
+            x=[self.cores[0][0].padding(i) for i in x]
+        x2=[]
+        for chan in self.cores:
+            xchan=sumchan2d([chan[i](x[i]) for i in range(len(chan))])
+            x2.append(xchan)
+        return x2
+
+    def grad_descent_zero(self,k):
+        for chan in self.cores:
+            for i in chan:
+                i.grad_descent_zero(k)
+
+def randinit(size):
+    '''
+    初始化权重
+    :param size: int 权重的维度大小
+    :return: Ten
+    '''
+    return Ten([random.gauss(0,(2/size)**0.5) for i in range(size)])
+
+def sumchan2d(x):
+    '''
+    对多通道的2dTen求和，变成单通道2dTen
+    :param x: list[list[Ten,Ten...],list[Ten,Ten...]...]
+    :return: list[Ten,Ten...]
+    '''
+    out=x[0]
+    for pici in range(1,len(x)):
+        for linei in range(len(x[0])):
+            out[linei]+=x[pici][linei]
+    return out
+
+def func2d(x,func):
+    '''
+    对2dTen进行函数操作
+    例如，把输入的2dTen放入激活函数Relu中: x=func2d(x,Ten.relu)
+    :param x: list[Ten,Ten...]
+    :param func: function Ten里面的函数
+    :return: list[Ten,Ten...]
+    '''
+    return [func(i) for i in x]
+
 def test():
     x=Ten([1])
     y=Ten([1])
@@ -433,14 +717,13 @@ def test():
         s3=((x+y+z)-Ten([19]))**2
         if s1.data[0]<0.01 and s2.data[0]<0.01 and s3.data[0]<0.01:
             break
-        s1.back()
-        s2.back()
+        s1.back(clean=False)
+        s2.back(clean=False)
         s3.back()
         # s1.grad=Vec([1])
         # s2.grad = Vec([1])
         # s3.grad = Vec([1])
         # Operator.back()
-        # Operator.computelist=[]
         x.data -= x.grad * Vec([0.002])
         y.data -= y.grad * Vec([0.002])
         z.data -= z.grad * Vec([0.002])
@@ -448,7 +731,4 @@ def test():
         x.zerograd()
         y.zerograd()
         z.zerograd()
-
-
-
 
