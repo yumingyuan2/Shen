@@ -158,6 +158,7 @@ class Ten():
     def back(self,clean=True):
         '''
         反向传播
+        速度较慢，快速版详见 Operator.back()
         :param clean: bool 是否清零计算图
         :return: None
         '''
@@ -227,14 +228,16 @@ class Operator():
         pass
 
     @classmethod
-    def back(cls):
+    def back(cls,last1grad=True):
         '''
         全局梯度计算。从后向前对每一个运算符使用diriv
-        使用前，请先把结果的梯度设为1
-        使用后，会自动把computelist的内容删除，请注意
+        *使用后，会自动把computelist的内容删除，请注意
+        :param last1grad: bool 是否把参与运算的最后一个Ten的导数设为1
         :return:None
         '''
         Operator.computelist.reverse()
+        if last1grad:
+            Operator.computelist[0].out.onegrad()
         for o in Operator.computelist:
             o.diriv()
         Operator.computelist=[]
@@ -682,7 +685,7 @@ def randinit(size):
     :param size: int 权重的维度大小
     :return: Ten
     '''
-    return Ten([random.gauss(0,(2/size)**0.5) for i in range(size)])
+    return Ten([random.gauss(0,(6/size)**0.5) for i in range(size)])
 
 def sumchan2d(x):
     '''
@@ -731,4 +734,6 @@ def test():
         x.zerograd()
         y.zerograd()
         z.zerograd()
+
+
 
