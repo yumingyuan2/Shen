@@ -112,7 +112,7 @@ class Ten():
         :param b: Ten
         :return: Ten
         '''
-        return ((a-b)**2).sum()
+        return ((a-b)**2).sum()/Ten([len(a.data)])
 
     @classmethod
     def nll(cls, out, target):
@@ -685,7 +685,8 @@ def randinit(size):
     :param size: int 权重的维度大小
     :return: Ten
     '''
-    return Ten([random.gauss(0,(6/size)**0.5) for i in range(size)])
+    sigma=0.04  # (2/size)**0.5/3 只有定值才能使GAN正常训练？
+    return Ten([random.gauss(0,sigma) for i in range(size)])
 
 def sumchan2d(x):
     '''
