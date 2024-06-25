@@ -119,7 +119,7 @@ def savepic(m):
     im = numpy.clip(numpy.array(image) * 255,0,255).astype(numpy.uint8)
     im.resize(28, 28)
     image = Image.fromarray(im)
-    image.save(time.strftime("gpic2/%Y-%m-%d_%H-%M-%S", time.localtime())+".png")
+    image.save(time.strftime("%Y-%m-%d_%H-%M-%S", time.localtime())+".png")
 
 savename="test3"
 if savename in os.listdir():
