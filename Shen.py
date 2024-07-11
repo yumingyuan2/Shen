@@ -104,6 +104,10 @@ class Ten():
         o=Sigmoid()
         return o.compute(self)
 
+    def tanh(self):
+        o=Tanh()
+        return o.compute(self)
+
     @classmethod
     def mse(cls,a,b):
         '''
@@ -113,6 +117,10 @@ class Ten():
         :return: Ten
         '''
         return ((a-b)**2).sum()/Ten([len(a.data)])
+
+    @classmethod
+    def sse(cls,a,b):
+        return ((a-b)**2).sum()
 
     @classmethod
     def nll(cls, out, target):
@@ -177,7 +185,7 @@ class Ten():
         for i in oplist:
             i.diriv()
         if clean:
-            Operator.computelist=[]
+            Operator.clean()
 
     def cut(self,start,end):
         '''
@@ -188,6 +196,16 @@ class Ten():
         '''
         o=Cut()
         return o.compute(self,start,end)
+
+    def expand(self,times):
+        '''
+        膨胀，把自身复制到多维度上，用于一维数字与多维向量计算时使用
+        :param times: int 复制多少次
+        :return: Ten
+        '''
+        out=Ten.connect([self for i in range(times)])
+        out.zerograd()
+        return out
 
     @classmethod
     def connect(cls,x):
@@ -240,6 +258,19 @@ class Operator():
             Operator.computelist[0].out.onegrad()
         for o in Operator.computelist:
             o.diriv()
+            o.inp=None
+            o.out=None
+        Operator.computelist=[]
+
+    @classmethod
+    def clean(cls):
+        '''
+        清理所有Operator，请务必在运行后调用，避免内存占用过大
+        :return: None
+        '''
+        for o in Operator.computelist:
+            o.inp=None
+            o.out=None
         Operator.computelist=[]
 
 class Add(Operator):
@@ -383,7 +414,7 @@ class Pownum(Operator):
         return c
 
     def diriv(self):
-        self.inp.grad+=Vec([self.num * self.inp.data[i] ** (self.num - 1) * self.out.grad[i] for i in range(len((self.inp.grad)))])
+        self.inp.grad+=Vec([self.num * self.inp.data[i] ** (self.num - 1) * self.out.grad[i] for i in range(len(self.inp.grad))])
 
 class Exp(Operator):
     '''
@@ -430,6 +461,18 @@ class Sigmoid(Operator):
     def diriv(self):
         self.inp.grad+=self.out.data*(self.out.grad*(Vec([1 for i in range(len(self.out))])-self.out.data))
 
+class Tanh(Operator):
+    def __init__(self):
+        super().__init__()
+
+    def compute(self,a):
+        self.inp=a
+        c=Ten([(e**i-e**(-i))/(e**i+e**(-i)) for i in a.data],self)
+        self.out=c
+        return c
+
+    def diriv(self):
+        self.inp.grad+=self.out.grad*Vec([1-i**2 for i in self.out.data])
 
 class Layer:
     '''
@@ -558,7 +601,7 @@ class Ten2(Ten,Layer):
         return t
 
     def load(self,t):
-        self.data=eval(t)
+        self.data=Vec(eval(t))
 
 class Conv(Layer):
     def __init__(self,width,height,stride_w=1,stride_h=1,pad=True,bias=True):
@@ -663,7 +706,7 @@ class MultiConv:
     def __call__(self,x):
         '''
         进行运算
-        :param x:list[list[Ten,Ten...],list[Ten,Ten...]...] 多通道的2dTen，被list包着的2dTen
+        :param x: list[list[Ten,Ten...],list[Ten,Ten...]...] 多通道的2dTen，被list包着的2dTen
         :return: list[list[Ten,Ten...],list[Ten,Ten...]...]
         '''
         if self.pad:
@@ -678,6 +721,157 @@ class MultiConv:
         for chan in self.cores:
             for i in chan:
                 i.grad_descent_zero(k)
+
+class Attention:
+    def __init__(self,embedsize,qksize=None,vsize=None):
+        '''
+        单头自注意力模块
+        :param embedsize: int 输入词向量维度
+        :param qksize: int q、k维度
+        :param vsize: int 输出词向量维度，默认与输入相同
+        '''
+        if qksize is None:
+            qksize=embedsize//2
+        if vsize is None:
+            vsize=embedsize
+        self.q=Linear(embedsize,qksize)
+        self.k=Linear(embedsize,qksize)
+        self.v=Linear(embedsize,vsize)
+        self.embedsize=embedsize
+        self.qksize=qksize
+        self.outsize=vsize
+
+    def __call__(self,x):
+        '''
+        进行运算
+        :param x: list[Ten,Ten...]  装着(多个词的词向量)的列表
+        :return: list[Ten,Ten...]
+        '''
+        qlist=[]
+        klist=[]
+        vlist=[]
+        for w in x:
+            qlist.append(self.q(w))
+            klist.append(self.k(w))
+            vlist.append(self.v(w))
+        atlist=[]
+        for i in range(len(qlist)):
+            line=[]
+            for j in range(len(qlist)):
+                line.append((qlist[i]*klist[j]).sum()/Ten([self.qksize**0.5]))
+            atlist.append(Ten.connect(line).softmax())
+        newvlist=[]
+        for i in range(len(qlist)):
+            line=Ten.zero(self.outsize)
+            for j in range(len(qlist)):
+                line+=vlist[j]*(atlist[i].cut(j,j+1).expand(self.outsize))
+            newvlist.append(line)
+        return newvlist
+
+    def grad_descent_zero(self, k):
+        self.q.grad_descent_zero(k)
+        self.k.grad_descent_zero(k)
+        self.v.grad_descent_zero(k)
+
+class MultiAtt:
+    def __init__(self,headnum,embedsize,qksize=None,vsize=None):
+        '''
+        多头注意力模块
+        :param headnum: int 注意力头数量
+        :param embedsize: int 输入词向量维度
+        :param qksize: int q、k维度
+        :param vsize: int 输出向量维度
+        '''
+        self.heads=[Attention(embedsize,qksize,vsize) for i in range(headnum)]
+        self.embedsize=embedsize
+
+    def __call__(self,x):
+        '''
+        进行运算
+        :param x: list[Ten,Ten...]  装着(多个词的词向量)的列表
+        :return: list[Ten,Ten...]
+        '''
+        out=[h(x) for h in self.heads]
+        out=sumchan2d(out)
+        return out
+
+    def grad_descent_zero(self,k):
+        for i in self.heads:
+            i.grad_descent_zero(k)
+
+class LSTM:
+    def __init__(self,embedsize,outputsize):
+        self.forgetgate=Linear(embedsize+outputsize,outputsize)
+        self.inputgate=Linear(embedsize+outputsize,outputsize)
+        self.inputgate2=Linear(embedsize + outputsize, outputsize)
+        self.outputgate=Linear(embedsize+outputsize,outputsize)
+        self.h=Ten.zero(outputsize)
+        self.s=Ten.zero(outputsize)
+
+    def __call__(self,x):
+        out=[]
+        for i in x:
+            i=Ten.connect([i,self.h])
+            self.s*=self.forgetgate(i).sigmoid()
+            self.s+=self.inputgate(i).sigmoid()*self.inputgate2(i).tanh()
+            self.h=self.outputgate(i).sigmoid()*self.s.tanh()
+            out.append(self.h)
+        return out
+
+    def grad_descent_zero(self,k):
+        self.forgetgate.grad_descent_zero(k)
+        self.inputgate.grad_descent_zero(k)
+        self.inputgate2.grad_descent_zero(k)
+        self.outputgate.grad_descent_zero(k)
+
+class Norm:
+    def __init__(self):
+        '''
+        标准化层
+        '''
+        self.w=Ten2([random.gauss(0,0.04)])
+        self.b=Ten2([random.gauss(0,0.04)])
+
+    def __call__(self,x:Ten,eps=0.0001):
+        n=Ten([len(x)])
+        mean=(x.sum()/n).expand(len(x))
+        sigma=(((x-mean)**2).sum()/n)**0.5
+        std=(x-mean)/(Ten([eps])+sigma).expand(len(x))
+        out=self.w.expand(len(x))*std+self.b.expand(len(x))
+        return out
+
+    def grad_descent_zero(self,k):
+        self.w.graddescent(k)
+        self.b.graddescent(k)
+
+class MiniTransformer:
+    def __init__(self,headnum,embsize,windowsize):
+        self.a=MultiAtt(headnum,embsize)
+        self.f1=Linear(embsize*windowsize,embsize*windowsize)
+        self.f2=Linear(embsize*windowsize,embsize*windowsize)
+        self.n1=Norm()
+        self.n2=Norm()
+        self.embsize=embsize
+        self.windowsize=windowsize
+
+    def __call__(self,x):
+        x2=x    # 2dTen
+        x=Ten.connect(self.a(x))
+        x=self.n1(x)
+        x+=Ten.connect(x2)
+        x2=x    # 1dTen
+        x=self.f2(self.f1(x).relu())
+        x=self.n2(x)
+        x+=x2
+        x=resize2d(x,self.embsize,self.windowsize)
+        return x
+
+    def grad_descent_zero(self,k):
+        self.a.grad_descent_zero(k)
+        self.f1.grad_descent_zero(k)
+        self.f2.grad_descent_zero(k)
+        self.n1.grad_descent_zero(k)
+        self.n2.grad_descent_zero(k)
 
 def randinit(size):
     '''
@@ -694,11 +888,24 @@ def sumchan2d(x):
     :param x: list[list[Ten,Ten...],list[Ten,Ten...]...]
     :return: list[Ten,Ten...]
     '''
-    out=x[0]
+    out=x[0][:]
     for pici in range(1,len(x)):
         for linei in range(len(x[0])):
             out[linei]+=x[pici][linei]
     return out
+
+def resize2d(x,embsize,windowsize):
+    '''
+    把一维Ten转为2dTen
+    :param x: Ten
+    :param embsize: int 每个Ten的大小
+    :param windowsize: int 多少个Ten
+    :return: list[Ten,Ten...]
+    '''
+    x2=[]
+    for i in range(windowsize):
+        x2.append(x.cut(i*embsize,(i+1)*embsize))
+    return x2
 
 def func2d(x,func):
     '''
@@ -709,6 +916,13 @@ def func2d(x,func):
     :return: list[Ten,Ten...]
     '''
     return [func(i) for i in x]
+
+def gradtest(func,xten):
+    x=func(xten)
+    xten2=Ten(xten.data)
+    xten2.data[0]+=0.001
+    x2=func(xten2)
+    return (x2.data[0]-x.data[0])/0.001
 
 def test():
     x=Ten([1])
@@ -735,6 +949,5 @@ def test():
         x.zerograd()
         y.zerograd()
         z.zerograd()
-
 
 
