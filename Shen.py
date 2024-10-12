@@ -96,7 +96,8 @@ class Ten():
 
     def softmax(self):
         a=self.exp()
-        s=a.sum()**-1
+        s=a.sum()
+        s=s**-1 if s.data[0]!=0 else Ten([0])
         c=Ten.connect([s for i in range(len(a))])
         return c*a
 
@@ -107,6 +108,9 @@ class Ten():
     def tanh(self):
         o=Tanh()
         return o.compute(self)
+
+    def gelu(self):
+        return self*(self*Ten([1.702]).expand(len(self))).sigmoid()
 
     @classmethod
     def mse(cls,a,b):
@@ -170,7 +174,7 @@ class Ten():
         :param clean: bool 是否清零计算图
         :return: None
         '''
-        self.grad=Vec([1 for i in self.grad])
+        self.onegrad()
         oplist=[self.op]
         for i in oplist:
             if i is None:
@@ -480,17 +484,24 @@ class Layer:
     '''
     layerlist=[]    # 装着所有要保存数据的实例的表
     isload=False    # 是否处于读取状态
+    issave=True     # 是否处于保存状态
     pointer=0   # 读取数据用的指针
+    filelen=0   # 读取的数据中子类的数量
 
     def __init__(self,*args):
         '''
-        当处于读取状态时，继承了Layer的实例会按顺序读取layerlist中的内容
+        当处于读取状态(isload==True)时，继承了Layer的实例会按顺序读取layerlist中的内容
+        当处于存储状态(issave==True)时，继承了Layer的实例会在创建时被加入layerlist，它在saveall调用时会被保存为文件
         一般情况下，继承它的类的init中需最后调用super().init()，防止数据被覆盖
         '''
-        if Layer.isload and len(Layer.layerlist)!=Layer.pointer:
+        if not Layer.issave:
+            return
+        if Layer.isload:
             self.load(Layer.layerlist[Layer.pointer])
             Layer.layerlist[Layer.pointer]=self
             Layer.pointer+=1
+            if Layer.filelen==Layer.pointer:
+                Layer.isload=False
         else:
             Layer.layerlist.append(self)
 
@@ -530,6 +541,7 @@ class Layer:
         Layer.isload=True
         with open(name,"r") as f:
             Layer.layerlist=f.readlines()
+            Layer.filelen=len(Layer.layerlist)
 
 class Linear(Layer):
     def __init__(self,inpsize,outsize,bias=True):
@@ -570,6 +582,18 @@ class Linear(Layer):
             self.b[i].graddescent(k)
             self.w[i].zerograd()
             self.b[i].zerograd()
+
+    def dcopy(self):
+        '''
+        对自己进行深拷贝
+        注：如果不希望拷贝出的对象被保存，请在调用前把Layer.issave设定为False
+        :return: Linear 拷贝出的对象
+        '''
+        c=Linear(len(self.w[0]),len(self.w))
+        for i in range(len(self.w)):
+            c.w[i]=Ten(self.w[i].data[:])
+            c.b[i]=Ten(self.b[i].data[:])
+        return c
 
     def save(self):
         t=str([i.data for i in self.w])
@@ -741,10 +765,12 @@ class Attention:
         self.qksize=qksize
         self.outsize=vsize
 
-    def __call__(self,x):
+    def __call__(self,x,masklist=None,trimask=False):
         '''
         进行运算
-        :param x: list[Ten,Ten...]  装着(多个词的词向量)的列表
+        :param x: list[Ten,Ten...]  装着词向量的列表
+        :param masklist: list[int,int...] 用于在softmax前盖住填充，输入中表中为1的位置会被替换为-inf
+        :param trimask: bool 是否使用三角掩码（在计算注意力权重时只关注当前和之前的词）
         :return: list[Ten,Ten...]
         '''
         qlist=[]
@@ -757,8 +783,12 @@ class Attention:
         atlist=[]
         for i in range(len(qlist)):
             line=[]
-            for j in range(len(qlist)):
-                line.append((qlist[i]*klist[j]).sum()/Ten([self.qksize**0.5]))
+            for j in range(len(klist)):
+                if (masklist is not None and (masklist[i]==1 or masklist[j]==1))\
+                 or (trimask and j>i):
+                    line.append(Ten([float("-inf")]))
+                else:
+                    line.append((qlist[i]*klist[j]).sum()/Ten([self.qksize**0.5]))
             atlist.append(Ten.connect(line).softmax())
         newvlist=[]
         for i in range(len(qlist)):
@@ -785,13 +815,13 @@ class MultiAtt:
         self.heads=[Attention(embedsize,qksize,vsize) for i in range(headnum)]
         self.embedsize=embedsize
 
-    def __call__(self,x):
+    def __call__(self,x,masklist=None,trimask=False):
         '''
         进行运算
         :param x: list[Ten,Ten...]  装着(多个词的词向量)的列表
         :return: list[Ten,Ten...]
         '''
-        out=[h(x) for h in self.heads]
+        out=[h(x,masklist,trimask) for h in self.heads]
         out=sumchan2d(out)
         return out
 
@@ -845,22 +875,26 @@ class Norm:
         self.b.graddescent(k)
 
 class MiniTransformer:
-    def __init__(self,headnum,embsize,windowsize):
+    def __init__(self,headnum,embsize,windowsize,lowrank=False):
         self.a=MultiAtt(headnum,embsize)
-        self.f1=Linear(embsize*windowsize,embsize*windowsize)
-        self.f2=Linear(embsize*windowsize,embsize*windowsize)
+        if lowrank:
+            self.f1=MiniLinear(embsize*windowsize,embsize*windowsize)
+            self.f2=MiniLinear(embsize*windowsize,embsize*windowsize)
+        else:
+            self.f1=Linear(embsize*windowsize,embsize*windowsize)
+            self.f2=Linear(embsize*windowsize,embsize*windowsize)
         self.n1=Norm()
         self.n2=Norm()
         self.embsize=embsize
         self.windowsize=windowsize
 
-    def __call__(self,x):
+    def __call__(self,x,masklist=None,trimask=False):
         x2=x    # 2dTen
-        x=Ten.connect(self.a(x))
+        x=Ten.connect(self.a(x,masklist,trimask))
         x=self.n1(x)
         x+=Ten.connect(x2)
         x2=x    # 1dTen
-        x=self.f2(self.f1(x).relu())
+        x=self.f2(self.f1(x).gelu())
         x=self.n2(x)
         x+=x2
         x=resize2d(x,self.embsize,self.windowsize)
@@ -873,13 +907,29 @@ class MiniTransformer:
         self.n1.grad_descent_zero(k)
         self.n2.grad_descent_zero(k)
 
+class MiniLinear:
+    def __init__(self,inpsize,outsize,midsize=None,bias=True):
+        if midsize is None:
+            midsize=round(((inpsize+outsize)/2)**0.5)
+        self.f1=Linear(inpsize,midsize,bias)
+        self.f2=Linear(midsize,outsize,bias)
+
+    def __call__(self,x):
+        x=self.f1(x)
+        x=self.f2(x)
+        return x
+
+    def grad_descent_zero(self,k):
+        self.f1.grad_descent_zero(k)
+        self.f2.grad_descent_zero(k)
+
 def randinit(size):
     '''
     初始化权重
     :param size: int 权重的维度大小
     :return: Ten
     '''
-    sigma=0.04  # (2/size)**0.5/3 只有定值才能使GAN正常训练？
+    sigma=(2/size)**0.5/5#0.04  # (2/size)**0.5/3 只有定值才能使GAN正常训练？
     return Ten([random.gauss(0,sigma) for i in range(size)])
 
 def sumchan2d(x):
