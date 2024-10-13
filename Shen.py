@@ -492,7 +492,7 @@ class Layer:
         '''
         当处于读取状态(isload==True)时，继承了Layer的实例会按顺序读取layerlist中的内容
         当处于存储状态(issave==True)时，继承了Layer的实例会在创建时被加入layerlist，它在saveall调用时会被保存为文件
-        一般情况下，继承它的类的init中需最后调用super().init()，防止数据被覆盖
+        一般情况下，继承它的类的init中需最后调用super().init()，防止读取的数据被覆盖
         '''
         if not Layer.issave:
             return
@@ -551,12 +551,12 @@ class Linear(Layer):
         :param outsize: int 作为输出的Ten的维度
         :param bias: bool 是否加上偏置
         '''
-        super().__init__()
         if not Layer.isload:
             self.w=[randinit(inpsize) for i in range(outsize)]
             self.bias=bias
             if bias:
                 self.b=[randinit(1) for i in range(outsize)]
+        super().__init__()
 
     def __call__(self,a):
         '''
@@ -638,7 +638,6 @@ class Conv(Layer):
         :param pad: bool 是否进行填充（使运算的输入和输出的大小一样）
         :param bias: bool 是否加上偏置
         '''
-        super().__init__()
         if not Layer.isload:
             self.width=width
             self.height=height
@@ -649,6 +648,7 @@ class Conv(Layer):
             self.bias=bias
             if bias:
                 self.b=randinit(1)
+        super().__init__()
 
     def padding(self,x):
         '''
