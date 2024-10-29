@@ -117,21 +117,24 @@ def train(m,mv,n=500,discount=0.99):
         p=m.forward(exp[i][0])
         pc = p.cut(exp[i][1],exp[i][1]+1)
         v=mv.forward(exp[i][0])
-        entropy=Ten([0.1])*(p*p.log()).sum()
+        #entropy=(p*p.log()).sum()
         # print(p,rlist[i])
-        loss=Ten([-1])*(Ten([rlist[i]])-v)*pc.log()+entropy
+        loss=Ten([-1])*((Ten([rlist[i]])-v)*pc.log())#+Ten([0.0001])/entropy
         aloss+=loss.data[0]
+        if abs(loss.data[0]) > 50:
+            print(f"loss{loss.data[0]},梯度过高")
+            return
         Operator.back()
-    m.optimize(0.0002/len(exp))
+    m.optimize(0.0005/len(exp))
     mv.optimize(0)
     for i in range(len(exp)):
         v = mv.forward(exp[i][0])
         loss=Ten.mse(v,Ten([rlist[i]]))
         Operator.back()
-    mv.optimize(0.0002 / len(exp))
+    mv.optimize(0.0005 / len(exp))
     #print("aloss", aloss / len(exp))
 
-savename="rlt-2-rebase"
+savename="rlt-2-rebase-3"
 if savename in os.listdir():
     print("load",savename)
     Layer.loadall(savename)
