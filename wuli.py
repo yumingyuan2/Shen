@@ -713,7 +713,7 @@ class DingPhy(Phy): #定点，不参与力的计算
         if r is None:
             r = m ** 0.3
         self.r = r
-        self.axianshi = self.a
+        self.axianshi = [0,0,0]
         self.color = color
 
 class Changjing:
