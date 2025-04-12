@@ -50,14 +50,26 @@ class Muscle:
         self.p2.force2(dk*self.dampk,self.p1.p)
 
 class Skeleton:
-    def __init__(self,p1,p2,x=None,k=1000):
+    def __init__(self,p1,p2,x=None,k=1000,dampk=20):
         self.p1=p1
         self.p2=p2
         self.x=distant(p1,p2) if x is None else x
         self.k=k
+        self.dampk=dampk
 
     def run(self):
         self.p1.resilience(self.x,self.k,self.p2)
+        dv=[self.p1.v[0]-self.p2.v[0],
+            self.p1.v[1]-self.p2.v[1],
+            self.p1.v[2]-self.p2.v[2]]
+        dp=[self.p1.p[0]-self.p2.p[0],
+            self.p1.p[1]-self.p2.p[1],
+            self.p1.p[2]-self.p2.p[2]]
+        dk=sum([dv[0]*dp[0],
+                dv[1]*dp[1],
+                dv[2]*dp[2]])/distant(self.p1,self.p2)
+        self.p1.force2(dk*self.dampk,self.p2.p)
+        self.p2.force2(dk*self.dampk,self.p1.p)
 
 class Creature:
     def __init__(self,phylist,musclelist,skeletonlist):
@@ -167,7 +179,7 @@ def test():
         Phy.tplay()
         #print(c.getstat(False))
 
-def leg2():
+def leg2(): #fail
     p=[Phy(1,[0,0,0],[0,100,0]),
        Phy(1,[0,0,0],[100,100,0]),# 右上
        Phy(1,[0,0,0],[50,50,0]),
@@ -342,6 +354,49 @@ def box4():
     sk=[Skeleton(p[0],p[1])]
     c=Creature(p,m,sk)
     return c
+
+def leg():
+    p=[Phy(1,[0,0,0],[-50,200,0]),
+       Phy(1,[0,0,0],[50,200,0]),
+       Phy(1,[0,0,0],[-50,140,0]),
+       Phy(1,[0,0,0],[50,140,0]),
+       Phy(1,[0,0,0],[-50,70,0]),
+       Phy(1,[0,0,0],[50,70,0]),
+       Phy(1,[0,0,0],[-50,0,0]),
+       Phy(1,[0,0,0],[50,0,0])]
+    m=[Muscle(p[1],p[3]),
+       Muscle(p[2],p[4]),
+       Muscle(p[5],p[7])]
+    sk=[Skeleton(p[0],p[1]),
+       Skeleton(p[0],p[2]),
+       Skeleton(p[1],p[2]),
+       Skeleton(p[2],p[3]),
+       Skeleton(p[3],p[4]),
+       Skeleton(p[3],p[5]),
+       Skeleton(p[4],p[5]),
+       Skeleton(p[4],p[6]),
+       Skeleton(p[5],p[6]),
+       Skeleton(p[6],p[7])]
+    c=Creature(p,m,sk)
+    return c
+
+def hat():
+    p=[Phy(1,[0,0,0],[0,150,0]),
+       Phy(1,[0,0,0],[-50,30,0]),
+       Phy(1,[0,0,0],[50,30,0]),
+       Phy(1,[0,0,0],[-50,0,0]),
+       Phy(1,[0,0,0],[50,0,0])]
+    m=[Muscle(p[1],p[3]),
+       Muscle(p[1],p[4]),
+       Muscle(p[2],p[3]),
+       Muscle(p[2],p[4])]
+    sk=[Skeleton(p[0],p[1]),
+        Skeleton(p[0],p[2]),
+        Skeleton(p[1],p[2])]
+    c=Creature(p,m,sk)
+    return c
+
+
 # t=0
 # while True:
 #     tt=(t//50)%3
