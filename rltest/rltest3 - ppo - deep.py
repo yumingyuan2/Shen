@@ -56,6 +56,7 @@ class env(Environment):
         self.plumb=[(self.plp[1].p[0]-self.plp[0].p[0])/distant(self.plp[0],self.plp[1]),
                     (self.plp[1].p[1]-self.plp[0].p[1])/distant(self.plp[0],self.plp[1])]
         self.ang=0
+        self.foot=[i for i in self.creatures[0].phys if i.p[1]<=0]
 
     def getstat(self):  #box21 leg35
         s=self.creatures[0].getstat(False,pk=0.023,vk=0.028,ak=0.001,mk=0.05)
@@ -153,14 +154,12 @@ class env(Environment):
                 if e.isend():
                     break
     
-    def isend(self,h=1):
-        if self.creatures[0].phys[1].p[1]<h+self.ground or self.creatures[0].phys[2].p[1]<h+self.ground:
-            # 如果身体着地停止训练，box2外其他虚拟生物需要修改
-            return True
+    def isend(self,h=1):  
         for i in self.creatures[0].phys:
-            if i.p[1]>h+self.ground:
-                return False
-        return True
+            if i not in self.foot and i.p[1]<h+self.ground:
+                # 如果身体着地停止训练
+                return True
+        return False
 
 class model:
     def __init__(self):
@@ -305,7 +304,7 @@ def train(m, mv, memo, n=200, times=1,discount=0.99,lamb=0.99, ek=0.5,eps=0.2):
             Operator.back()
             count+=1
             c+=1
-    m.optimize(0.0005/count)#0.0005
+    m.optimize(0.0008/count)#0.0005
     mv.optimize(0.0008/count)
     t2=time.perf_counter()
     print(ar,aloss/count,alossv/count,alosse/count,alratio/count,t1-t0,t2-t1)
